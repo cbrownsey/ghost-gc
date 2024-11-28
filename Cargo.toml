@@ -1,0 +1,7 @@
+[package]
+name = "ghost-gc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+castaway = "0.2.3"
