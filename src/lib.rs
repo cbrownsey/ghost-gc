@@ -1,4 +1,10 @@
-#![feature(ptr_metadata, strict_provenance, ptr_as_ref_unchecked, allocator_api)]
+#![feature(
+    ptr_metadata,
+    strict_provenance,
+    ptr_as_ref_unchecked,
+    allocator_api,
+    never_type
+)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![doc = include_str!("../README.md")]
 
@@ -15,6 +21,7 @@ mod write;
 
 mod gc_box;
 mod gc_weak;
+mod invariant;
 pub mod locked;
 
 pub use arena::{Arena, Rootable};
@@ -25,7 +32,7 @@ pub use gc_weak::Weak;
 pub use unique_gc::UniqueGc;
 pub use write::Write;
 
-pub(crate) type Invariant<'l> = core::marker::PhantomData<fn(&'l ()) -> &'l ()>;
+pub use invariant::Invariant;
 
 pub fn once_arena<F, R>(f: F) -> R
 where

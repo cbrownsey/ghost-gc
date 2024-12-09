@@ -1,6 +1,5 @@
 use core::{
     alloc::Layout,
-    marker::PhantomData,
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
     ptr::Pointee,
@@ -35,7 +34,7 @@ impl<'b, T> UniqueGc<'b, T> {
         // Safety: The value was just written.
         unsafe { inner.set_init() };
 
-        UniqueGc(inner, PhantomData)
+        UniqueGc(inner, Invariant)
     }
 
     /// Constructs a new garbage collected pointer with uninitialized contents.
@@ -107,7 +106,7 @@ impl<'b, T> UniqueGc<'b, [T]> {
 
         unsafe { inner.set_init() };
 
-        UniqueGc(inner, PhantomData)
+        UniqueGc(inner, Invariant)
     }
 
     /// Constructs a new garbage collected slice with uninitialized contents, with the memory being
@@ -134,7 +133,7 @@ impl<'b, T> UniqueGc<'b, [T]> {
 
         unsafe { inner.set_init() };
 
-        UniqueGc(inner, PhantomData)
+        UniqueGc(inner, Invariant)
     }
 }
 
@@ -268,7 +267,7 @@ impl<'b, T: ?Sized> UniqueGc<'b, T> {
             Layout::new::<<U as Pointee>::Metadata>(),
         );
 
-        UniqueGc::<'b, U>(unsafe { self.0.transmute::<U>() }, PhantomData)
+        UniqueGc::<'b, U>(unsafe { self.0.transmute::<U>() }, Invariant)
     }
 }
 

@@ -8,7 +8,7 @@ impl<'b, T: ?Sized> Default for Weak<'b, T> {
     fn default() -> Self {
         Weak(
             NonNull::new(core::ptr::without_provenance_mut(usize::MAX)).unwrap(),
-            PhantomData,
+            Invariant,
             PhantomData,
         )
     }
@@ -30,7 +30,7 @@ impl<'b, T: ?Sized> Weak<'b, T> {
     }
 
     pub(crate) unsafe fn from_box(ptr: GcBox<T>) -> Weak<'b, T> {
-        Weak(ptr.into_raw(), PhantomData, PhantomData)
+        Weak(ptr.into_raw(), Invariant, PhantomData)
     }
 
     pub fn upgrade(self) -> Option<Gc<'b, T>> {

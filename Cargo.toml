@@ -2,6 +2,9 @@
 name = "ghost-gc"
 version = "0.1.0"
 edition = "2021"
+authors = ["Cameron Brownsey <root@cbrownsey.dev>"]
+description = "A safe garbage collected arena."
+license = "MIT"
 
 [dependencies]
 castaway = "0.2.3"

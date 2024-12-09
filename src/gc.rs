@@ -1,4 +1,4 @@
-use core::{marker::PhantomData, ops::Deref};
+use core::ops::Deref;
 use std::{fmt::Debug, hash::Hash};
 
 use crate::{
@@ -52,7 +52,7 @@ impl<'b, T: ?Sized> Gc<'b, T> {
     // }
 
     pub(crate) unsafe fn from_box(ptr: GcBox<T>) -> Gc<'b, T> {
-        Gc(ptr, PhantomData)
+        Gc(ptr, Invariant)
     }
 }
 
