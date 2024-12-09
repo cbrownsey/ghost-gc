@@ -25,7 +25,7 @@ impl<T: ?Sized> Copy for GcBox<T> {}
 
 impl GcBox<Erased> {
     /// # Safety
-    /// The erased box must have come from a call to `GcBox<T>::erase`.
+    /// The erased box must have come from a call to `GcBox::<T>::erase`.
     pub unsafe fn restore_type<T: ?Sized>(self) -> GcBox<T> {
         GcBox(self.0, PhantomData)
     }
