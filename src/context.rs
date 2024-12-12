@@ -10,55 +10,66 @@ use crate::{
 };
 
 #[repr(transparent)]
-pub struct Mutation<'b, A = Global>(Context<A>, Invariant<'b>);
+pub struct Mutation<'b>(Invariant<'b>, Context<dyn Allocator>);
 
-impl<'b, A> Mutation<'b, A> {
-    pub(crate) fn new(ctx: &Context<A>) -> &Mutation<'b, A> {
-        // Safety: `Mutation` is a transparent wrapper around `Context`.
-        unsafe { core::mem::transmute::<&Context<A>, &Mutation<'b, A>>(ctx) }
+impl<'b> Mutation<'b> {
+    pub(crate) fn new<A>(ctx: &Context<A>) -> &Mutation<'b>
+    where
+        A: Allocator,
+    {
+        let ctx: &Context<dyn Allocator> = ctx;
+
+        // Safety: `Mutation` is a transparent wrapper around `Context<dyn Allocator>`.
+        unsafe { core::mem::transmute::<&Context<dyn Allocator>, &Mutation<'b>>(ctx) }
     }
 
-    pub(crate) fn context(&self) -> &Context<A> {
-        &self.0
+    pub(crate) fn context(&self) -> &Context<dyn Allocator> {
+        &self.1
     }
 
-    pub(crate) fn trace(&self, ptr: GcBox<Erased>) {
-        todo!()
-    }
-
-    pub(crate) fn weak_trace(&self, ptr: GcBox<Erased>) {
-        todo!()
+    pub(crate) fn allocate<T>(&self, meta: <T as Pointee>::Metadata, layout: Layout) -> GcBox<T>
+    where
+        T: Collect,
+    {
+        self.context().allocate(meta, layout)
     }
 }
 
-impl<A> core::fmt::Debug for Mutation<'_, A> {
+impl core::fmt::Debug for Mutation<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("Mutation").finish()
+        write!(f, "Mutation")
     }
 }
 
 #[repr(transparent)]
-pub struct Collector<A = Global>(Context<A>);
+pub struct Collector(Context<dyn Allocator>);
 
 impl Collector {
-    pub(crate) fn new(ctx: &Context) -> &Collector {
+    pub(crate) fn new<A>(ctx: &Context<A>) -> &Collector
+    where
+        A: Allocator,
+    {
+        let ctx: &Context<dyn Allocator> = ctx;
+
         // Safety: `Collector` is a transparent wrapper around `Context`.
-        unsafe { core::mem::transmute::<&Context, &Collector>(ctx) }
+        unsafe { core::mem::transmute::<&Context<dyn Allocator>, &Collector>(ctx) }
     }
 
-    pub(crate) fn context(&self) -> &Context {
+    pub(crate) fn context(&self) -> &Context<dyn Allocator> {
         &self.0
     }
 }
 
 impl core::fmt::Debug for Collector {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("Collector").finish()
+        write!(f, "Collector")
     }
 }
 
-#[derive(Default)]
-pub(crate) struct Context<A = Global> {
+pub(crate) struct Context<A = Global>
+where
+    A: Allocator + ?Sized,
+{
     newly_allocated: RefCell<Vec<GcBox<Erased>>>,
     objects: RefCell<Vec<GcBox<Erased>>>,
     trace_root: Cell<bool>,
@@ -68,53 +79,41 @@ pub(crate) struct Context<A = Global> {
     alloc: A,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Pacing {
-    pub trigger_bytes: Option<usize>,
-    pub trigger_allocations: Option<usize>,
-    pub mark_stride: usize,
-    pub sweep_stride: usize,
-}
-
-impl Pacing {
-    const MAX_PACE: Pacing = Pacing {
-        trigger_bytes: Some(0),
-        trigger_allocations: Some(0),
-        mark_stride: usize::MAX,
-        sweep_stride: usize::MAX,
-    };
-
-    fn should_wake(&self, allocations: usize, bytes: usize) -> bool {
-        self.trigger_allocations.is_some_and(|n| allocations >= n)
-            || self.trigger_bytes.is_some_and(|n| bytes >= n)
+impl Context {
+    pub(crate) fn new(pacing: Pacing) -> Context {
+        Self::new_in(pacing, Global)
     }
 }
 
-impl Default for Pacing {
-    fn default() -> Self {
-        Self {
-            trigger_bytes: Some(4192),
-            trigger_allocations: Some(64),
-            mark_stride: 16,
-            sweep_stride: 8,
-        }
-    }
-}
-
-impl<A> Context<A> {
-    pub fn new_in(pacing: Pacing, alloc: A) -> Context<A>
+impl<A: Allocator> Context<A> {
+    pub(crate) fn new_in(pacing: Pacing, alloc: A) -> Context<A>
     where
-        A: Allocator,
+        A: Allocator + 'static,
     {
-        Self {
-            newly_allocated: RefCell::default(),
-            objects: RefCell::default(),
-            trace_root: Cell::default(),
-            first_gray: Cell::default(),
-            phase: Cell::default(),
+        Context {
+            newly_allocated: Default::default(),
+            objects: Default::default(),
+            trace_root: Default::default(),
+            first_gray: Default::default(),
+            phase: Default::default(),
             pacing,
             alloc,
         }
+    }
+
+    fn trace_next(&self, root: &impl Collect) {
+        if self.trace_root.get() {
+            root.trace(Collector::new(self))
+        }
+
+        todo!()
+    }
+}
+
+impl<A: Allocator + ?Sized> Context<A> {
+    fn push_box(&self, ptr: GcBox<Erased>) {
+        ptr.set_next(self.first_gray.get());
+        self.first_gray.set(Some(ptr));
     }
 
     pub fn allocations(&self) -> usize {
@@ -125,10 +124,7 @@ impl<A> Context<A> {
         &self,
         meta: T::Metadata,
         layout: Layout,
-    ) -> GcBox<T>
-    where
-        A: Allocator,
-    {
+    ) -> GcBox<T> {
         let ptr = self.alloc.allocate(layout).unwrap();
 
         let gc = unsafe { GcBox::new(ptr.as_ptr().cast(), meta, layout) };
@@ -252,7 +248,10 @@ impl<A> Context<A> {
     }
 }
 
-impl<A> Drop for Context<A> {
+impl<A> Drop for Context<A>
+where
+    A: Allocator + ?Sized,
+{
     fn drop(&mut self) {
         let newly_allocated: &[GcBox<Erased>] = &self.newly_allocated.borrow();
         let objects: &[GcBox<Erased>] = &self.objects.borrow();
@@ -261,6 +260,41 @@ impl<A> Drop for Context<A> {
             unsafe { obj.vtable().drop_in_place(*obj) };
 
             unsafe { alloc::alloc::dealloc(obj.inner_ptr().cast::<u8>(), obj.layout()) };
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Pacing {
+    pub trigger_bytes: Option<usize>,
+    pub trigger_allocations: Option<usize>,
+    pub mark_stride: usize,
+    pub sweep_stride: usize,
+}
+
+impl Pacing {
+    /// The maximum possible pace for the garbage collector to run. It will always trigger, and
+    /// never stop tracing.
+    const MAX_PACE: Pacing = Pacing {
+        trigger_bytes: Some(0),
+        trigger_allocations: Some(0),
+        mark_stride: usize::MAX,
+        sweep_stride: usize::MAX,
+    };
+
+    fn should_wake(&self, allocations: usize, bytes: usize) -> bool {
+        self.trigger_allocations.is_some_and(|n| allocations >= n)
+            || self.trigger_bytes.is_some_and(|n| bytes >= n)
+    }
+}
+
+impl Default for Pacing {
+    fn default() -> Self {
+        Self {
+            trigger_bytes: Some(4192),
+            trigger_allocations: Some(64),
+            mark_stride: 16,
+            sweep_stride: 8,
         }
     }
 }

@@ -28,7 +28,9 @@ impl<'b, T> UniqueGc<'b, T> {
     where
         T: Collect,
     {
-        let inner = mt.context().allocate::<T>((), Layout::new::<T>());
+        let inner = mt.allocate::<T>((), Layout::new::<T>());
+        // .context()
+        // .allocate::<T>((), Layout::new::<T>(), mt.alloc());
         // Safety: No references exist, as the pointer was just created.
         unsafe { inner.data_ptr().write(val) };
         // Safety: The value was just written.
