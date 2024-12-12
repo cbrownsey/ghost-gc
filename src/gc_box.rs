@@ -33,18 +33,13 @@ impl GcBox<Erased> {
 
 impl<T: ?Sized> GcBox<T> {
     pub fn inner_layout(data: Layout) -> Result<Layout, LayoutError> {
-        let layout = Layout::new::<GcHeader>();
-        let (layout, _) = layout.extend(Layout::new::<<T as Pointee>::Metadata>())?;
-        let (layout, _) = layout.extend(data)?;
-        Ok(layout.pad_to_align())
+        GcInner::<T>::layout(data)
     }
 
     pub unsafe fn new(ptr: *mut u8, metadata: <T as Pointee>::Metadata, layout: Layout) -> GcBox<T>
     where
         T: Collect,
     {
-        let layout = GcInner::<T>::layout(layout).unwrap();
-
         let inner: GcInner<(), <T as Pointee>::Metadata> = GcInner {
             header: GcHeader {
                 vtable: Cell::new(GcVTable::new::<T>()),
@@ -191,8 +186,8 @@ pub(crate) struct GcInner<T: ?Sized, M = <T as Pointee>::Metadata> {
 impl<T: ?Sized, M> GcInner<T, M> {
     pub fn layout(data: Layout) -> Result<Layout, LayoutError> {
         let layout = Layout::new::<GcHeader>();
+        let (layout, _) = layout.extend(Layout::new::<M>())?;
         let (layout, _) = layout.extend(data)?;
-        let (layout, _) = layout.extend(layout)?;
         Ok(layout.pad_to_align())
     }
 }
@@ -204,4 +199,15 @@ pub enum Colour {
     Weak,
     Gray,
     Black,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gcinner_layout_sanity() {
+        let layout = GcInner::<(), ()>::layout(Layout::new::<()>()).unwrap();
+        assert_eq!(layout.size(), Layout::new::<GcHeader>().size());
+    }
 }

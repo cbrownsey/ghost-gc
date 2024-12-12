@@ -1,17 +1,10 @@
-use std::{
-    alloc::{Allocator, Global, Layout},
-    marker::PhantomData,
-    ptr::Pointee,
-};
+use std::alloc::{Allocator, Global};
 
 use crate::{
     context::{Context, Pacing},
-    gc_box::GcBox,
-    Collect, Invariant, Mutation,
+    Mutation,
 };
 use alloc::boxed::Box;
-
-type ContextAndAlloc<A> = (Box<Context>, A);
 
 /// A garbage collected arena, inside which garbage collected pointers can be allocated.
 pub struct Arena<R: Rootable, A = Global>
@@ -48,7 +41,7 @@ where
         A: Allocator + 'static,
     {
         let context: Box<Context<A>> = Box::new(Context::new_in(Pacing::default(), alloc));
-        let root = f(&Mutation::new(&context));
+        let root = f(Mutation::new(&context));
 
         Arena { context, root }
     }

@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    gc_box::{Colour, Erased, GcBox},
+    gc_box::{Colour, Erased, GcBox, GcInner},
     Collect, Invariant,
 };
 
@@ -125,6 +125,10 @@ impl<A: Allocator + ?Sized> Context<A> {
         meta: T::Metadata,
         layout: Layout,
     ) -> GcBox<T> {
+        let Ok(layout) = GcInner::<T>::layout(layout) else {
+            todo!()
+        };
+
         let ptr = self.alloc.allocate(layout).unwrap();
 
         let gc = unsafe { GcBox::new(ptr.as_ptr().cast(), meta, layout) };
