@@ -19,7 +19,7 @@ impl<'b, T: ?Sized> Weak<'b, T> {
         Weak::default()
     }
 
-    pub(crate) fn into_box(self) -> Option<GcBox<T>> {
+    pub(crate) fn as_box(&self) -> Option<GcBox<T>> {
         if self.0.addr().get() == usize::MAX {
             None
         } else {
@@ -34,7 +34,7 @@ impl<'b, T: ?Sized> Weak<'b, T> {
     }
 
     pub fn upgrade(self) -> Option<Gc<'b, T>> {
-        if let Some(b) = self.into_box() {
+        if let Some(b) = self.as_box() {
             if b.is_initialized() {
                 Some(unsafe { Gc::from_box(b) })
             } else {
@@ -50,6 +50,10 @@ unsafe impl<'b, T: ?Sized> Collect for Weak<'b, T> {
     const NEEDS_TRACE: bool = true;
 
     fn trace(&self, _c: &crate::Collector) {
-        todo!()
+        use crate::gc_box::Colour;
+
+        if let Some(gc) = self.as_box() {
+            unsafe { gc.set_colour(Colour::Weak) };
+        }
     }
 }

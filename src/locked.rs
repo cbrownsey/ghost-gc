@@ -34,6 +34,10 @@ impl<T: Copy> LockedCell<T> {
     pub fn get(&self) -> T {
         self.0.get()
     }
+
+    pub fn get_mut(&mut self) -> &mut T {
+        self.0.get_mut()
+    }
 }
 
 impl<T: ?Sized> LockedCell<T> {
@@ -139,6 +143,10 @@ where
 
     pub fn as_ptr(&self) -> *mut T {
         self.0.as_ptr()
+    }
+
+    pub fn get_mut(&mut self) -> &mut T {
+        self.0.get_mut()
     }
 }
 

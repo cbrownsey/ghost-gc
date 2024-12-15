@@ -64,6 +64,23 @@ impl<T: ?Sized> Deref for Gc<'_, T> {
     }
 }
 
+unsafe impl<'b, T: ?Sized> Collect for Gc<'b, T> {
+    const NEEDS_TRACE: bool = true;
+
+    fn trace(&self, c: &crate::Collector) {
+        use crate::gc_box::Colour;
+
+        match self.0.colour() {
+            Colour::Gray | Colour::White | Colour::Weak => {
+                unsafe { self.0.set_colour(Colour::Gray) };
+
+                c.context().push_box(self.0.erase());
+            }
+            Colour::Black => {}
+        }
+    }
+}
+
 impl<T: ?Sized> Clone for Gc<'_, T> {
     fn clone(&self) -> Self {
         *self
@@ -101,13 +118,5 @@ impl<T: ?Sized + Ord> Ord for Gc<'_, T> {
 impl<T: ?Sized + Hash> Hash for Gc<'_, T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         (**self).hash(state);
-    }
-}
-
-unsafe impl<T: ?Sized> Collect for Gc<'_, T> {
-    const NEEDS_TRACE: bool = true;
-
-    fn trace(&self, _c: &crate::Collector) {
-        todo!()
     }
 }

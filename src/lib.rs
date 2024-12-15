@@ -44,6 +44,12 @@ where
         type Root<'a> = OnceRoot;
     }
 
+    unsafe impl Collect for OnceRoot {
+        const NEEDS_TRACE: bool = false;
+
+        fn trace(&self, _c: &Collector) {}
+    }
+
     let arena = Arena::<OnceRoot>::new(|_| OnceRoot);
 
     arena.view(|_, mt| f(mt))

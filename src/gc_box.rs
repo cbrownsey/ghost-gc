@@ -4,12 +4,14 @@ use core::ptr::Pointee;
 use std::{
     alloc::{Layout, LayoutError},
     cell::Cell,
+    fmt::Debug,
     marker::PhantomData,
     ptr::NonNull,
 };
 
 use crate::{gc_vtable::GcVTable, Collect, Collector};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Erased;
 
 #[repr(transparent)]
@@ -68,7 +70,7 @@ impl<T: ?Sized> GcBox<T> {
         GcBox(ptr.cast(), PhantomData)
     }
 
-    pub unsafe fn collect_value(&self, c: &Collector) {
+    pub unsafe fn trace_value(&self, c: &Collector) {
         if self.is_initialized() {
             unsafe {
                 self.header().vtable.get().collect(self.erase(), c);
@@ -164,6 +166,23 @@ impl<T: ?Sized> GcBox<T> {
         let gc = GcBox(self.0, PhantomData);
         gc.header().vtable.set(GcVTable::new::<U>());
         gc
+    }
+}
+
+impl<T: Debug> Debug for GcBox<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GcBox")
+            .field("colour", &self.colour())
+            .field("is_live", &self.is_initialized())
+            .field(
+                "value",
+                if self.is_initialized() {
+                    unsafe { self.data() }
+                } else {
+                    &"<uninit>"
+                },
+            )
+            .finish()
     }
 }
 

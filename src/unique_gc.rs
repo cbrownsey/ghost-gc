@@ -287,6 +287,23 @@ impl<T: ?Sized> DerefMut for UniqueGc<'_, T> {
     }
 }
 
+unsafe impl<'b, T: ?Sized> Collect for UniqueGc<'b, T> {
+    const NEEDS_TRACE: bool = true;
+
+    fn trace(&self, c: &crate::Collector) {
+        use crate::gc_box::Colour;
+
+        match self.0.colour() {
+            Colour::Gray | Colour::White | Colour::Weak => {
+                unsafe { self.0.set_colour(Colour::Gray) };
+
+                c.context().push_box(self.0.erase());
+            }
+            Colour::Black => {}
+        }
+    }
+}
+
 impl<T: ?Sized + Debug> Debug for UniqueGc<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         (**self).fmt(f)

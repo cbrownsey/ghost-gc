@@ -2,7 +2,7 @@ use std::alloc::{Allocator, Global};
 
 use crate::{
     context::{Context, Pacing},
-    Mutation,
+    Collect, Mutation,
 };
 use alloc::boxed::Box;
 
@@ -23,10 +23,14 @@ where
     where
         F: for<'b> FnOnce(&Mutation<'b>) -> R::Root<'b>,
     {
-        let context: Box<Context> = Box::new(Context::new(Pacing::default()));
-        let root = f(Mutation::new(&*context));
+        Arena::new_in(f, Global)
+    }
 
-        Arena { context, root }
+    pub fn new_paced<F>(f: F, pacing: Pacing) -> Arena<R>
+    where
+        F: for<'b> FnOnce(&Mutation<'b>) -> R::Root<'b>,
+    {
+        Arena::new_paced_in(f, pacing, Global)
     }
 }
 
@@ -40,7 +44,15 @@ where
         F: for<'b> FnOnce(&Mutation<'b>) -> R::Root<'b>,
         A: Allocator + 'static,
     {
-        let context: Box<Context<A>> = Box::new(Context::new_in(Pacing::default(), alloc));
+        Arena::new_paced_in(f, Pacing::default(), alloc)
+    }
+
+    pub fn new_paced_in<F>(f: F, pacing: Pacing, alloc: A) -> Arena<R, A>
+    where
+        F: for<'b> FnOnce(&Mutation<'b>) -> R::Root<'b>,
+        A: Allocator + 'static,
+    {
+        let context: Box<Context<A>> = Box::new(Context::new_in(pacing, alloc));
         let root = f(Mutation::new(&context));
 
         Arena { context, root }
@@ -57,10 +69,23 @@ where
     where
         F: for<'b> FnOnce(&mut R::Root<'b>, &Mutation<'b>) -> Ret,
     {
+        self.context.set_root_untraced();
         f(&mut self.root, Mutation::new(&self.context))
+    }
+
+    pub fn run_collection(&mut self) {
+        self.context.advance_collection(&self.root);
+    }
+
+    pub fn complete_collection(&mut self) {
+        self.context.run_full_cycle(&self.root);
+    }
+
+    pub fn allocations(&self) -> usize {
+        self.context.allocations()
     }
 }
 
 pub trait Rootable {
-    type Root<'l>;
+    type Root<'l>: Collect;
 }

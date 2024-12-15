@@ -2,6 +2,7 @@ use core::{alloc::Layout, ptr::Pointee};
 use std::{
     alloc::{Allocator, Global},
     cell::{Cell, RefCell},
+    ptr::NonNull,
 };
 
 use crate::{
@@ -51,7 +52,7 @@ impl Collector {
     {
         let ctx: &Context<dyn Allocator> = ctx;
 
-        // Safety: `Collector` is a transparent wrapper around `Context`.
+        // Safety: `Collector` is a transparent wrapper around a `Context<dyn Allocator>`.
         unsafe { core::mem::transmute::<&Context<dyn Allocator>, &Collector>(ctx) }
     }
 
@@ -75,14 +76,10 @@ where
     trace_root: Cell<bool>,
     first_gray: Cell<Option<GcBox<Erased>>>,
     phase: Cell<CollectionPhase>,
+    cycle_allocations: Cell<usize>,
+    cycle_bytes: Cell<usize>,
     pacing: Pacing,
     alloc: A,
-}
-
-impl Context {
-    pub(crate) fn new(pacing: Pacing) -> Context {
-        Self::new_in(pacing, Global)
-    }
 }
 
 impl<A: Allocator> Context<A> {
@@ -96,28 +93,185 @@ impl<A: Allocator> Context<A> {
             trace_root: Default::default(),
             first_gray: Default::default(),
             phase: Default::default(),
+            cycle_allocations: Cell::new(0),
+            cycle_bytes: Cell::new(0),
             pacing,
             alloc,
         }
     }
 
-    fn trace_next(&self, root: &impl Collect) {
+    fn trace_next(&self, root: &impl Collect) -> bool {
         if self.trace_root.get() {
-            root.trace(Collector::new(self))
+            root.trace(Collector::new(self));
+            self.set_root_traced();
+
+            true
+        } else if let Some(val) = self.take_next_box() {
+            match val.colour() {
+                Colour::White | Colour::Weak => unreachable!(),
+                Colour::Gray => {
+                    unsafe { val.trace_value(Collector::new(self)) };
+                    unsafe { val.set_colour(Colour::Black) };
+                }
+                Colour::Black => {}
+            }
+
+            true
+        } else {
+            false
         }
-
-        todo!()
     }
-}
 
-impl<A: Allocator + ?Sized> Context<A> {
-    fn push_box(&self, ptr: GcBox<Erased>) {
-        ptr.set_next(self.first_gray.get());
-        self.first_gray.set(Some(ptr));
+    fn take_next_box(&self) -> Option<GcBox<Erased>> {
+        let ptr = self.first_gray.get()?;
+        let next = ptr.next_gc().take();
+        self.first_gray.set(next);
+        Some(ptr)
+    }
+
+    pub fn set_root_untraced(&self) {
+        self.trace_root.set(true);
+    }
+
+    pub fn set_root_traced(&self) {
+        self.trace_root.set(false);
     }
 
     pub fn allocations(&self) -> usize {
         self.objects.borrow().len() + self.newly_allocated.borrow().len()
+    }
+
+    pub fn advance_phase(&self) -> bool {
+        match self.phase.get() {
+            CollectionPhase::Sleep => {
+                self.objects
+                    .borrow_mut()
+                    .append(&mut *self.newly_allocated.borrow_mut());
+
+                self.cycle_allocations.set(0);
+                self.cycle_bytes.set(0);
+
+                self.set_root_untraced();
+
+                for obj in self.objects.borrow().iter() {
+                    unsafe { obj.set_colour(Colour::White) };
+                    obj.set_next(None);
+                }
+
+                self.phase.set(CollectionPhase::Mark);
+
+                false
+            }
+            CollectionPhase::Mark => {
+                self.phase.set(CollectionPhase::Sweep { index: 0 });
+
+                false
+            }
+            CollectionPhase::Sweep { .. } => {
+                self.phase.set(CollectionPhase::Sleep);
+
+                true
+            }
+        }
+    }
+
+    pub fn advance_collection(&self, root: &impl Collect) {
+        self.advance_cycle_by(root, self.pacing);
+    }
+
+    /// Advances the cycle by the given pacing. If the current phase ends, then this function will
+    /// return without making any progress on the next one, regardless of the pacing value.
+    pub fn advance_cycle_by(&self, root: &impl Collect, pacing: Pacing) {
+        match self.phase.get() {
+            CollectionPhase::Sleep => {
+                let allocations = self.cycle_allocations.get();
+                let bytes = self.cycle_bytes.get();
+
+                if pacing.should_wake(allocations, bytes) {
+                    self.advance_phase();
+                }
+            }
+            CollectionPhase::Mark => {
+                let mut marked = 0;
+
+                dbg!(&self.first_gray);
+                while self.trace_next(root) {
+                    marked += 1;
+
+                    dbg!(&self.first_gray);
+
+                    if marked >= self.pacing.mark_stride {
+                        return;
+                    }
+                }
+
+                self.advance_phase();
+            }
+            CollectionPhase::Sweep { index } => {
+                let objects = &mut *self.objects.borrow_mut();
+
+                let mut current = index;
+                let mut end =
+                    std::cmp::min(index.saturating_add(pacing.sweep_stride), objects.len());
+
+                while current < end {
+                    dbg!(&objects, current, end);
+                    let obj = objects[current];
+
+                    match obj.colour() {
+                        Colour::White => {
+                            unsafe { obj.drop_in_place() };
+                            objects.swap_remove(current);
+                            unsafe { self.deallocate(obj) };
+                            end -= 1;
+                            continue;
+                        }
+                        Colour::Gray => unreachable!(),
+                        Colour::Weak => {
+                            unsafe { obj.drop_in_place() };
+                            obj.set_uninit();
+                            current += 1;
+                            continue;
+                        }
+                        Colour::Black => {
+                            current += 1;
+                            continue;
+                        }
+                    }
+                }
+
+                if end == objects.len() {
+                    self.advance_phase();
+                }
+            }
+        }
+    }
+
+    /// Runs the collection cycle until all allocated objects have been marked and swept.
+    pub fn run_full_cycle(&self, root: &impl Collect) {
+        // Only need to reset phase if there are objects to be swept.
+        // Resetting to sleep phase is always safe.
+        if !self.newly_allocated.borrow().is_empty() {
+            self.phase.set(CollectionPhase::Sleep);
+        }
+
+        if self.phase.get() == CollectionPhase::Sleep {
+            self.advance_phase();
+        }
+
+        while self.phase.get() != CollectionPhase::Sleep {
+            dbg!(self.phase.get());
+            self.advance_cycle_by(root, Pacing::MAX_PACE);
+        }
+
+        debug_assert!(matches!(self.phase.get(), CollectionPhase::Sleep { .. }));
+    }
+}
+
+impl<A: Allocator + ?Sized> Context<A> {
+    pub fn push_box(&self, ptr: GcBox<Erased>) {
+        ptr.set_next(self.first_gray.get());
+        self.first_gray.set(Some(ptr));
     }
 
     pub fn allocate<T: ?Sized + Collect + Pointee>(
@@ -138,117 +292,12 @@ impl<A: Allocator + ?Sized> Context<A> {
         gc
     }
 
-    pub fn advance_phase(&self) -> bool {
-        match self.phase.get() {
-            CollectionPhase::Sleep { .. } => {
-                self.phase.set(CollectionPhase::Mark);
+    pub unsafe fn deallocate(&self, gc: GcBox<Erased>) {
+        let layout = gc.layout();
 
-                false
-            }
-            CollectionPhase::Mark => {
-                self.phase.set(CollectionPhase::Sweep { index: 0 });
+        let ptr = gc.inner_ptr().cast::<u8>();
 
-                false
-            }
-            CollectionPhase::Sweep { .. } => {
-                self.phase.set(CollectionPhase::Sleep {
-                    allocations: 0,
-                    bytes: 0,
-                });
-
-                true
-            }
-        }
-    }
-
-    /// Advances the cycle by the given pacing. If the current phase ends, then this function will
-    /// return without making any progress on the next one, regardless of the pacing value.
-    pub fn advance_cycle_by(&self, root: &impl Collect, pacing: Pacing) {
-        match self.phase.get() {
-            CollectionPhase::Sleep { allocations, bytes } => {
-                if pacing.should_wake(allocations, bytes) {
-                    self.objects
-                        .borrow_mut()
-                        .append(&mut *self.newly_allocated.borrow_mut());
-
-                    for obj in self.objects.borrow().iter() {
-                        unsafe { obj.set_colour(Colour::White) };
-                    }
-
-                    self.advance_phase();
-                }
-            }
-            CollectionPhase::Mark => {
-                let mut marked = 0;
-
-                let mut next = self.first_gray.take();
-                while let Some(gc) = next {
-                    if gc.is_initialized() {
-                        unsafe { gc.drop_in_place() };
-
-                        gc.set_uninit();
-                    }
-
-                    next = gc.next_gc();
-                    marked += 1;
-
-                    if marked >= pacing.mark_stride {
-                        self.first_gray.set(next);
-                        return;
-                    }
-                }
-
-                self.advance_phase();
-            }
-            CollectionPhase::Sweep { index } => {
-                let objects = &mut *self.objects.borrow_mut();
-
-                let mut current = index;
-                let mut end =
-                    std::cmp::min(index.saturating_add(pacing.sweep_stride), objects.len());
-
-                while current < end {
-                    let obj = objects[current];
-                    match obj.colour() {
-                        Colour::White => {
-                            unsafe { obj.drop_in_place() };
-                            objects.swap_remove(current);
-                            end -= 1;
-                            continue;
-                        }
-                        Colour::Gray => unreachable!(),
-                        Colour::Weak => {
-                            unsafe { obj.drop_in_place() };
-                            obj.set_uninit();
-                            current += 1;
-                            continue;
-                        }
-                        Colour::Black => {
-                            current += 1;
-                            continue;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Advances the cycle until finished. If the context is currently in sleep, it will move
-    /// through the entire cycle if the trigger condition is met.
-    pub fn finish_cycle(&self, root: &impl Collect) {
-        loop {
-            if let CollectionPhase::Sleep { allocations, bytes } = self.phase.get() {
-                if self.pacing.should_wake(allocations, bytes) {
-                    self.advance_phase();
-                } else {
-                    break;
-                }
-            }
-
-            self.advance_cycle_by(root, Pacing::MAX_PACE);
-        }
-
-        debug_assert!(matches!(self.phase.get(), CollectionPhase::Sleep { .. }));
+        unsafe { self.alloc.deallocate(NonNull::new_unchecked(ptr), layout) };
     }
 }
 
@@ -303,29 +352,12 @@ impl Default for Pacing {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum CollectionPhase {
-    Sleep { allocations: usize, bytes: usize },
+    #[default]
+    Sleep,
     Mark,
-    Sweep { index: usize },
-}
-
-impl CollectionPhase {
-    pub fn leave_sleep(&self, pacing: Pacing) -> bool {
-        let &Self::Sleep { allocations, bytes } = self else {
-            return true;
-        };
-
-        pacing.trigger_allocations.is_some_and(|n| allocations >= n)
-            || pacing.trigger_bytes.is_some_and(|n| bytes >= n)
-    }
-}
-
-impl Default for CollectionPhase {
-    fn default() -> Self {
-        CollectionPhase::Sleep {
-            allocations: 0,
-            bytes: 0,
-        }
-    }
+    Sweep {
+        index: usize,
+    },
 }
