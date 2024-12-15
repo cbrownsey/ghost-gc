@@ -22,6 +22,10 @@ impl<T: ?Sized> Write<T> {
         unsafe { Write::new_unchecked(value) }
     }
 
+    pub fn into_inner(&self) -> &T {
+        &self.0
+    }
+
     pub fn unlock(&self) -> &T::Unlocked
     where
         T: Unlock,
