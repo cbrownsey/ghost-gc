@@ -14,7 +14,6 @@ mod arena;
 mod collect;
 mod context;
 mod gc;
-// mod gc_ptr;
 mod gc_vtable;
 mod unique_gc;
 mod write;
@@ -32,7 +31,7 @@ pub use gc_weak::Weak;
 pub use unique_gc::UniqueGc;
 pub use write::Write;
 
-pub use invariant::Invariant;
+use invariant::Invariant;
 
 pub fn once_arena<F, R>(f: F) -> R
 where
