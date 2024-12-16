@@ -1,10 +1,4 @@
-#![feature(
-    ptr_metadata,
-    strict_provenance,
-    ptr_as_ref_unchecked,
-    allocator_api,
-    never_type
-)]
+#![feature(ptr_metadata, strict_provenance, allocator_api)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![doc = include_str!("../README.md")]
 

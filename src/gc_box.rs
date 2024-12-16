@@ -150,12 +150,12 @@ impl<T: ?Sized> GcBox<T> {
 
     pub unsafe fn data(&self) -> &T {
         debug_assert!(self.is_initialized());
-        unsafe { self.data_ptr().as_ref_unchecked() }
+        unsafe { &*self.data_ptr() }
     }
 
     pub unsafe fn data_mut(&mut self) -> &mut T {
         debug_assert!(self.is_initialized());
-        unsafe { self.data_ptr().as_mut_unchecked() }
+        unsafe { &mut *self.data_ptr() }
     }
 
     pub fn erase(self) -> GcBox<Erased> {

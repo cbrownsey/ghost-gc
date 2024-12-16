@@ -7,3 +7,8 @@ escape from the arena in which it was allocated.
 
 The `Gc` is capable of holding any type which implements the `Collect` trait,
 which includes most types which do not contain interior mutability.
+
+This library is more or less a rewrite of
+[gc-arena](https://lib.rs/crates/gc-arena), with additional nightly features,
+such as the allocator api, and pointer metadata, to make the garbage collected
+pointers store the metadata on the heap.
