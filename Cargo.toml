@@ -1,8 +1,10 @@
 [package]
 name = "ghost-gc"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Cameron Brownsey <root@cbrownsey.dev>"]
+documentation = "https://docs.rs/ghost-gc/latest/ghost_gc/"
+repository = "https://github.com/cbrownsey/ghost-gc"
 description = "A safe garbage collected arena."
 license = "MIT"
 
