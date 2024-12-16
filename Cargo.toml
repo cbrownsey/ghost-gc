@@ -9,4 +9,3 @@ description = "A safe garbage collected arena."
 license = "MIT"
 
 [dependencies]
-castaway = "0.2.3"
